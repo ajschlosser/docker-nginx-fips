@@ -1,5 +1,7 @@
 # docker-nginx-fips : Create an Nginx Docker image with FIPS compliant OpenSSL
 
+Create Nginx Docker images with FIPS compliant OpenSSL. Compiles Nginx from source with OpenSSL and the OpenSSL FIPS object module. Can compile from OpenSSL Softeware Foundation CD-ROM for fully FIPS compliant Nginx.
+
 ## Overview
 
 This repository contains a build script, `build.sh`, that prepares files and arguments in order to build a Docker image from the Dockerfile. It contains source code for Nginx, the Nginx HTTP Redis module, ZLib, PCRE, OpenSSL, and the OpenSSL FIPS object module (although the latter is required to be provided via an official OpenSSL Software Foundation CD-ROM) -- all of which is compiled according to the build script. If the instructions are followed properly, then running `build.sh` should result in a Docker image running an Nginx API gateway with FIPS-compliant OpenSSL.
@@ -19,14 +21,20 @@ The build script also accepts the following command-line arguments:
     --nginx-conf-path           Path for Nginx conf directory to use in deployment
     --image-tag                 Tag for the Docker image to be built
     --run                       Attempt to run the Docker image when finished
-    --nginx-conf-mount-path     If the above option exists, mount this path as the Nginx conf folder (optional)
+    --name                      If the --run option exists, the container will have this name
+    --port                      If the --run option exists, the container will expose this port
+                                    (can include as many as needed, e.g. --port 8080:80 --port 4443:443)
+    --no-expose                 If the --run option exists, don't expose any ports
+    --nginx-conf-mount-path     If the --run option exists, mount this path as the Nginx conf folder (optional)
     --no-clean                  Don't clean up temporary files after build
     --quiet                     Try to repress verbose Docker output
     --help                      Show this help
     
 The `--default` option overrules all others but `--image-tag`, `--run`, `--nginx-conf-mount-path`, `--no-clean`, and `--quiet`. If no OpenSSL Software Foundation CD-ROM is provided, and the image is instead built using the source code provided in this repository, then `--openssl-fips-cdrom-path` and `--openssl-fips-version` will be ignored. (In this case, however, the image will not necessarily be FIPS-compliant.)
 
-#### Example
+#### Examples
+
+##### Building with default options
 
 In general, running the build script with the `--default` option is the equivalent of executing the following (assuming Mac OS X for `--openssl-fips-cdrom-path`):
 
@@ -43,19 +51,24 @@ If an option is not provided, then the user will be prompted for the information
 
 For development purposes, it's generally fine to use the `--default` option. If no CD-ROM is detected, it will default to the FIPS object module source code provided in this repo (currently at least version `2.0.12`).
 
+##### Using additional options
+
 The default build can be executed with certain additional options, e.g.
 
 ```sh
 ./build.sh \
-    --image-tag dingus              \
-    --run                           \
-    --nginx-conf-mount-path ./conf  \
-    --no-clean                      \
-    --quiet                         \
+    --image-tag dingus                   \
+    --run                                \
+    --name api-server                    \
+    --port 8080:80                       \
+    --port 4443:443                      \
+    --nginx-conf-mount-path ${PWD}/conf  \
+    --no-clean                           \
+    --quiet                              \
     --default
 ```
 
-If the above command is executed, a default Docker image (tagged 'dingus') will be built with verbose Docker output suppressed; after it is built, it will be run with a mounted volume, './conf'. If it is interrupted or finishes, it will not attempt to clean up temporary files and folders. Note that the `--default` option is last in this case.
+If the above command is executed, a default Docker image (tagged 'dingus') will be built with verbose Docker output suppressed; after it is built, it will be run with a mounted volume, './conf'. The container will be named 'api-server'. The container's port 80 will be forwarded to the host's port 8080; likewise, 443 will be forwarded to 4443. If the build script is interrupted or finishes, it will not attempt to clean up temporary files and folders, due to the `--no-clean` option being present. Note that the `--default` option is last in this case.
 
 ## Details
 

@@ -53,8 +53,7 @@ RUN make
 RUN make install
 
 # Copy SSL certificate/key and initial Nginx conf
-COPY nginx/tmp/conf/*  $NGINX_INSTALL_PATH/conf/
-COPY nginx/tmp/cert/*  $NGINX_INSTALL_PATH/conf/cert
+COPY nginx/vendor/tmp/conf $NGINX_INSTALL_PATH/conf
 
 # Link binaries
 RUN ln -s /usr/local/nginx/sbin/nginx /usr/bin/nginx && \
