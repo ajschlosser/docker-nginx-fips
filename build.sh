@@ -39,7 +39,7 @@ DEFAULT_LIB_PATH="lib"
 DEFAULT_NGINX_PATH="${PWD}/$DEFAULT_SRC_PATH/nginx-1.11.2"
 DEFAULT_NGINX_CONF_PATH="${PWD}/$DEFAULT_LIB_PATH/conf"
 DEFAULT_CERTIFICATE_PATH="${PWD}/$DEFAULT_LIB_PATH/certs"
-DEFAULT_NGINX_VENDOR_PATH="$DEFAULT_NGINX_PATH"
+DEFAULT_TMP_PATH="${PWD}/tmp"
 
 # Global build variables
 CERTIFICATE_PATH=
@@ -52,7 +52,6 @@ MOUNT_PATHS=""
 NGINX_CONF_PATH=
 NGINX_CONF_MOUNT_PATH=""
 NGINX_PATH=
-NGINX_VENDOR_PATH=
 NOCD=0
 NOCLEAN=0
 NOEXPOSE=0
@@ -247,7 +246,7 @@ get_os () {
 # Remove temporary folders 
 # Globals:
 #   DEFAULT_NGINX_PATH
-#   DEFAULT_NGINX_VENDOR_PATH
+#   DEFAULT_TMP_PATH
 #   NOCLEAN
 # Arguments:
 #   None
@@ -257,10 +256,10 @@ get_os () {
 clean_up () {
 
     # Remove temporary folder if it exists
-    if [ -d "$DEFAULT_NGINX_VENDOR_PATH/tmp" ] && ( [ $NOCLEAN -eq 0 ] || [ $# -eq 0 ] )
+    if [ -d "$DEFAULT_TMP_PATH" ] && ( [ $NOCLEAN -eq 0 ] || [ $# -eq 0 ] )
     then
         printf "\n${NC}Removing existing temporary folder...\n"
-        rm -rf $DEFAULT_NGINX_VENDOR_PATH/tmp
+        rm -rf $DEFAULT_TMP_PATH
         if [ $? -ne 0 ]
         then
             printf "${RED}Failed to remove existing temporary folder. ${NC}\n"
@@ -303,7 +302,7 @@ clean_up () {
 # Create a new temporary folder for the source code
 # Globals:
 #   NOCLEAN
-#   DEFAULT_NGINX_VENDOR_PATH
+#   DEFAULT_TMP_PATH
 # Arguments:
 #   None
 # Returns:
@@ -312,7 +311,7 @@ clean_up () {
 set_up () {
     
     printf "${NC}Creating new temporary folder...\n"
-    mkdir $DEFAULT_NGINX_VENDOR_PATH/tmp
+    mkdir $DEFAULT_TMP_PATH
     if [ $? -ne 0 ]
     then
         printf "${RED}Failed to create new temporary folder.${NC}\n"
@@ -485,7 +484,7 @@ get_version () {
 ##############################################################################
 # Extracts the FIPS module source code, then calls build_docker_image
 # Globals:
-#   DEFAULT_NGINX_VENDOR_PATH
+#   DEFAULT_TMP_PATH
 #   FILENAME
 #   OPENSSL_FIPS_CDROM_PATH
 #   OPENSSL_FIPS_EXTRACT_PATH
@@ -499,7 +498,7 @@ get_source_code () {
     
     printf "\nExtracting OpenSSL FIPS object module $OPENSSL_FIPS_VERSION source code from $OPENSSL_FIPS_CDROM_PATH/$FILENAME...\n"
 
-    tar -xvf $OPENSSL_FIPS_CDROM_PATH/$FILENAME -C $DEFAULT_NGINX_VENDOR_PATH/tmp
+    tar -xvf $OPENSSL_FIPS_CDROM_PATH/$FILENAME -C $DEFAULT_TMP_PATH
     if [ $? -ne 0 ]
     then
         printf "\n${RED}Failed to copy and extract source code.${NC}\n"
@@ -508,7 +507,7 @@ get_source_code () {
         printf "\n${GREEN}Finished getting ${YELLOW}${BOLD}OpenSSL FIPS object module $OPENSSL_FIPS_VERSION${NC}${GREEN} source.${NC}\n"
     fi
     
-    OPENSSL_FIPS_EXTRACT_PATH=tmp/${FILENAME%.tar.gz}
+    OPENSSL_FIPS_EXTRACT_PATH=${FILENAME%.tar.gz}
     
     build_docker_image $OPENSSL_FIPS_EXTRACT_PATH
 }
@@ -518,7 +517,6 @@ get_source_code () {
 # Globals:
 #   CERTIFICATE_PATH
 #   DEFAULT_CERTIFICATE_PATH
-#   DEFAULT_NGINX_VENDOR_PATH
 # Arguments:
 #   None
 # Returns:
@@ -530,7 +528,7 @@ generate_ssl_certificate () {
         printf >&2 "${RED}You need to install OpenSSL to generate self-signed SSL certificates.${NC}\n"
         clean_up 1
     }
-    openssl req -x509 -newkey rsa:2048 -keyout $DEFAULT_NGINX_VENDOR_PATH/tmp/server.key -out $DEFAULT_NGINX_VENDOR_PATH/tmp/server.crt -days XXX
+    openssl req -nodes -new -x509 -keyout $DEFAULT_CERTIFICATE_PATH/server.key -out $DEFAULT_CERTIFICATE_PATH/server.crt
     if [ $? -ne 0 ]
     then
         printf "\n${RED}Failed to generate SSL certificate and key.${NC}\n"
@@ -546,7 +544,7 @@ generate_ssl_certificate () {
 # Globals:
 #   CERTIFICATE_PATH
 #   DEFAULT_CERTIFICATE_PATH
-#   DEFAULT_NGINX_VENDOR_PATH
+#   DEFAULT_TMP_PATH
 # Arguments:
 #   None
 # Returns:
@@ -588,23 +586,13 @@ get_ssl_certificate () {
         done
     fi
     
-    mkdir $DEFAULT_NGINX_VENDOR_PATH/tmp/certs \
-        && cp $CERTIFICATE_PATH/*.{key,crt} $DEFAULT_NGINX_VENDOR_PATH/tmp/certs/
-    if [ $? -ne 0 ]
-    then
-        printf "\n${RED}Failed to copy SSL certificate(s) and key(s).${NC}\n"
-        clean_up $?
-    else
-        printf "${GREEN}Finished copying ${YELLOW}${BOLD}SSL certificate(s) and key(s)${NC}${GREEN}.${NC}\n"
-    fi
-    
 }
 
 ##############################################################################
 # Copies files from a particular path to a temporary location
 # Globals:
 #   DEFAULT_NGINX_CONF_PATH
-#   DEFAULT_NGINX_VENDOR_PATH
+#   DEFAULT_TMP_PATH
 #   NGINX_CONF_PATH
 # Arguments:
 #   None
@@ -630,8 +618,8 @@ get_nginx_conf () {
             fi
         fi
     fi
-    mkdir $DEFAULT_NGINX_VENDOR_PATH/tmp/conf \
-        && cp $NGINX_CONF_PATH/* $DEFAULT_NGINX_VENDOR_PATH/tmp/conf
+    mkdir $DEFAULT_TMP_PATH/conf \
+        && cp $NGINX_CONF_PATH/* $DEFAULT_TMP_PATH/conf
     if [ $? -ne 0 ]
     then
         printf "\n${RED}Failed to copy Nginx conf folder to temporary location.${NC}\n"
@@ -652,11 +640,11 @@ get_nginx_conf () {
 #   None
 ##############################################################################
 get_nginx_paths () {
-    if [ -z NGINX_CONF_MOUNT_PATH ]
+    if [ -z $NGINX_CONF_MOUNT_PATH ]
     then
         get_nginx_conf
     fi
-    if [ -z SSL_CERTS_MOUNT_PATH ]
+    if [ -z $SSL_CERTS_MOUNT_PATH ]
     then
         get_ssl_certificate
     fi

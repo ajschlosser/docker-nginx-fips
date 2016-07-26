@@ -26,6 +26,7 @@ ENV ACCESS_LOG_PATH     $LOG_PATH/access.log
 
 # Set build arguments
 ARG OPENSSL_FIPS_PATH=openssl-fips-2.0.12
+ARG SRC_TMP_PATH=tmp
 ARG SRC_PATH=src
 ARG LIB_PATH=lib
 
@@ -34,10 +35,13 @@ ARG LIB_PATH=lib
 ##############################################################################
 
 # Copy Nginx, OpenSSL, OpenSSL FIPS, HTTP Redis, ZLib, and PCRE source code
-COPY $SRC_PATH $TMP_PATH/
+COPY $SRC_PATH      $TMP_PATH/
+
+# Copy any temporary pre-build files, including source code
+COPY $SRC_TMP_PATH  $TMP_PATH/
 
 # Copy initial Nginx conf(s) and SSL certificate(s)/key(s)
-COPY $LIB_PATH $TMP_PATH/
+COPY $LIB_PATH      $TMP_PATH/
 
 ##############################################################################
 # INSTALL DEPENDENCIES
