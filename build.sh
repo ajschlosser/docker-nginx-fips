@@ -2,14 +2,23 @@
 #
 # Prepare OpenSSL FIPS object module source code and build Nginx Docker image.
 
+trap ctrl_c INT # Handle interrupts
+
+echo "\n"
+
+##############################################################################
+# DEPENDENCY CHECK
+##############################################################################
+
 # Ensure that Docker is installed
 command -v docker >/dev/null 2>&1 || {
     echo >&2 "\nYou need to install Docker first."
     exit 1
 }
 
-trap ctrl_c INT
-
+##############################################################################
+# GLOBAL VARIABLES
+##############################################################################
 
 # Pretty terminal colors
 BOLD=$( tput bold )
@@ -19,25 +28,32 @@ WHITE=$( tput setaf 7 )
 YELLOW=$(tput setaf 3)
 NC=$( tput sgr0 )
 
-# Default global configuration variables
-CERTIFICATE_PATH=
-DEFAULT=0
+# Global default configuration variables
 DEFAULT_CONTAINER_NAME="api-gateway"
 DEFAULT_EXPOSE_PORTS="-p 8080:80 -p 4443:443"
 DEFAULT_IMAGE_TAG="$USER/nginx-fips"
 DEFAULT_OPENSSL_FIPS_DIR="openssl-fips-2.0.12"
 DEFAULT_OPENSSL_FIPS_VERSION="2.0.10"
-DEFAULT_NGINX_PATH="./nginx"
-DEFAULT_NGINX_CONF_PATH="./conf"
-DEFAULT_CERTIFICATE_PATH="$DEFAULT_NGINX_CONF_PATH/ssl_certificates"
-DEFAULT_NGINX_VENDOR_PATH="$DEFAULT_NGINX_PATH/vendor"
+DEFAULT_SRC_PATH="src"
+DEFAULT_LIB_PATH="lib"
+DEFAULT_NGINX_PATH="${PWD}/$DEFAULT_SRC_PATH/nginx-1.11.2"
+DEFAULT_NGINX_CONF_PATH="${PWD}/$DEFAULT_LIB_PATH/conf"
+DEFAULT_CERTIFICATE_PATH="${PWD}/$DEFAULT_LIB_PATH/certs"
+DEFAULT_NGINX_VENDOR_PATH="$DEFAULT_NGINX_PATH"
+
+# Global build variables
+CERTIFICATE_PATH=
 CONTAINER_NAME=
+DEFAULT=0
+EXPOSE_PORTS=""
 FILENAME=
 IMAGE_TAG=
+MOUNT_PATHS=""
 NGINX_CONF_PATH=
-NGINX_CONF_MOUNT_PATH=
+NGINX_CONF_MOUNT_PATH=""
 NGINX_PATH=
 NGINX_VENDOR_PATH=
+NOCD=0
 NOCLEAN=0
 NOEXPOSE=0
 OPENSSL_FIPS_CDROM_PATH=
@@ -46,7 +62,11 @@ OPENSSL_FIPS_EXTRACT_PATH=
 OPENSSL_FIPS_VERSION=
 QUIET=""
 RUN=0
-EXPOSE_PORTS=""
+SSL_CERTS_MOUNT_PATH=""
+
+##############################################################################
+# FUNCTIONS
+##############################################################################
 
 ##############################################################################
 # Prints a description of valid command-line arguments
@@ -74,7 +94,11 @@ print_help () {
     --no-expose                 If the --run option exists, don't expose any ports      \n\
     --nginx-conf-mount-path     If the --run option exists, mount this path as the Nginx\n\
                                     conf folder
+    --ssl-certs-mount-path      If the --run option exists, mount this path as the SSL  \n\
+                                    certs folder
     --no-clean                  Don't clean up temporary files after build              \n\
+    --no-cd                     Don't prompt user for any CD-ROM related information,   \n\
+                                    and just use the provided FIPS object module source \n\
     --quiet                     Try to repress verbose Docker output                    \n\
     --help                      Show this help\n\n"
     exit 1
@@ -98,6 +122,9 @@ while getopts "h:-:" opt; do
                 ;;
             no-expose)
                 NOEXPOSE=1
+                ;;
+            no-cd)
+                NOCD=1
                 ;;
             port)
                 EXPOSE_PORTS="$EXPOSE_PORTS -p ${!OPTIND}"
@@ -161,6 +188,17 @@ while getopts "h:-:" opt; do
                 then
                     NGINX_CONF_MOUNT_PATH="$val"
                     printf "${NC}Will mount Nginx conf folder path: $val${NC}\n" >&2;
+                else
+                    printf "\n${RED}Could not locate path: $val${NC}\n"
+                fi
+                ;;
+            ssl-certs-mount-path)
+                val="${!OPTIND}"
+                OPTIND=$(( $OPTIND + 1 ))
+                if [ -d "$val" ]
+                then
+                    SSL_CERTS_MOUNT_PATH="$val"
+                    printf "${NC}Will mount SSL certs folder path: $val${NC}\n" >&2;
                 else
                     printf "\n${RED}Could not locate path: $val${NC}\n"
                 fi
@@ -247,10 +285,10 @@ clean_up () {
     fi
 
     dangling=$(docker images --quiet --filter "dangling=true")
-    if [ $dangling ] && ( [ $NOCLEAN -eq 0 ] || [ $# -eq 0 ] )
+    if [ -n "$dangling" ] && ( [ $NOCLEAN -eq 0 ] || [ $# -eq 0 ] )
     then
         printf "\nRemoving dangling Docker images...\n"
-        sleep 1 # Docker needs time to delete related containers
+        sleep 2 # Docker needs time to delete related containers
         docker rmi $(docker images --quiet --filter "dangling=true")
     fi
 
@@ -319,7 +357,7 @@ run_docker () {
     docker run                  \
         -d                      \
         --name $CONTAINER_NAME  \
-        $1                      \
+        $MOUNT_PATHS            \
         $EXPOSE_PORTS           \
         $IMAGE_TAG &            \
     wait
@@ -330,6 +368,8 @@ run_docker () {
 ##############################################################################
 # Build the Nginx Docker image with the OpenSSL/FIPS source code
 # Globals:
+#   DEFAULT_LIB_PATH
+#   DEFAULT_SRC_PATH
 #   IMAGE_TAG
 #   USER
 # Arguments:
@@ -353,10 +393,12 @@ build_docker_image () {
     then
         printf "Since the ${YELLOW}--quiet${NC} option was set, there won't be much output. Please be patient...\n"
     fi
-    docker build        \
-        $QUIET          \
-        -t $IMAGE_TAG   \
-        --build-arg OPENSSL_FIPS_PATH=$1 .
+    docker build                                \
+        $QUIET                                  \
+        -t $IMAGE_TAG                           \
+        --build-arg OPENSSL_FIPS_PATH=$1        \
+        --build-arg SRC_PATH=$DEFAULT_SRC_PATH  \
+        --build-arg LIB_PATH=$DEFAULT_LIB_PATH .
     if [ $? -ne 0 ]
     then
         printf "\n${RED}${BOLD}There was a problem building the Docker image ${NC}${NC}\n"
@@ -378,13 +420,15 @@ build_docker_image () {
                     EXPOSE_PORTS=""
                 fi
             fi
-            if [ -z $NGINX_CONF_MOUNT_PATH ]
+            if [ -n "$NGINX_CONF_MOUNT_PATH" ]
             then
-                mount_path=""
-            else
-                mount_path="-v $NGINX_CONF_MOUNT_PATH:/usr/local/nginx/conf"
+                MOUNT_PATHS="$MOUNT_PATHS -v $NGINX_CONF_MOUNT_PATH:/usr/local/nginx/conf"
             fi
-            run_docker "$mount_path"
+            if [ -n "$SSL_CERTS_MOUNT_PATH" ]
+            then
+                MOUNT_PATHS="$MOUNT_PATHS -v $SSL_CERTS_MOUNT_PATH:/usr/local/ssl/certs"
+            fi
+            run_docker
         fi
         clean_up
         exit 0
@@ -486,7 +530,7 @@ generate_ssl_certificate () {
         printf >&2 "${RED}You need to install OpenSSL to generate self-signed SSL certificates.${NC}\n"
         clean_up 1
     }
-    openssl req -x509 -newkey rsa:2048 -keyout $DEFAULT_NGINX_VENDOR_PATH/tmp/key.pem -out $DEFAULT_NGINX_VENDOR_PATH/tmp/cert.pem -days XXX
+    openssl req -x509 -newkey rsa:2048 -keyout $DEFAULT_NGINX_VENDOR_PATH/tmp/server.key -out $DEFAULT_NGINX_VENDOR_PATH/tmp/server.crt -days XXX
     if [ $? -ne 0 ]
     then
         printf "\n${RED}Failed to generate SSL certificate and key.${NC}\n"
@@ -518,7 +562,7 @@ get_ssl_certificate () {
             read -ep "(default: y): ${NC}${NC}" yn
             case $yn in
                 [Nn]* )
-                    printf "\n${RED}${BOLD}WARNING:${NC}${RED} Self-signed certificates should not be used in production.${NC} But you knew that.\n"
+                    printf "\n${RED}${BOLD}WARNING:${NC}${RED} Self-signed certificates should not be used in production.${NC}\n"
                     read -resp $"Press any key to generate a self-signed SSL certificate and key..." -n1 key
                     generate_ssl_certificate
                     break
@@ -544,8 +588,8 @@ get_ssl_certificate () {
         done
     fi
     
-    mkdir $DEFAULT_NGINX_VENDOR_PATH/tmp/conf/cert \
-        && cp $CERTIFICATE_PATH/*.pem $DEFAULT_NGINX_VENDOR_PATH/tmp/conf/cert/
+    mkdir $DEFAULT_NGINX_VENDOR_PATH/tmp/certs \
+        && cp $CERTIFICATE_PATH/*.{key,crt} $DEFAULT_NGINX_VENDOR_PATH/tmp/certs/
     if [ $? -ne 0 ]
     then
         printf "\n${RED}Failed to copy SSL certificate(s) and key(s).${NC}\n"
@@ -587,7 +631,7 @@ get_nginx_conf () {
         fi
     fi
     mkdir $DEFAULT_NGINX_VENDOR_PATH/tmp/conf \
-        && cp $NGINX_CONF_PATH/**/* $DEFAULT_NGINX_VENDOR_PATH/tmp/conf/
+        && cp $NGINX_CONF_PATH/* $DEFAULT_NGINX_VENDOR_PATH/tmp/conf
     if [ $? -ne 0 ]
     then
         printf "\n${RED}Failed to copy Nginx conf folder to temporary location.${NC}\n"
@@ -608,8 +652,14 @@ get_nginx_conf () {
 #   None
 ##############################################################################
 get_nginx_paths () {
-    get_nginx_conf
-    get_ssl_certificate
+    if [ -z NGINX_CONF_MOUNT_PATH ]
+    then
+        get_nginx_conf
+    fi
+    if [ -z SSL_CERTS_MOUNT_PATH ]
+    then
+        get_ssl_certificate
+    fi
 }
 
 ##############################################################################
@@ -623,7 +673,7 @@ get_nginx_paths () {
 #   None
 ##############################################################################
 handle_no_cd () {
-    printf "\n${RED}${BOLD}WARNING:${NC}${RED} This image will not be FIPS-compliant.${NC} Oh, well.\n"
+    printf "\n${RED}${BOLD}WARNING:${NC}${RED} This image will not be FIPS-compliant.${NC}\n"
     read -resp $"Press any key to continue..." -n1 key
     get_nginx_paths
     build_docker_image $DEFAULT_OPENSSL_FIPS_DIR
@@ -638,7 +688,7 @@ handle_no_cd () {
 # Returns:
 #   None
 ##############################################################################
-function ctrl_c() {
+function ctrl_c () {
     if [ $NOCLEAN -eq 0 ]
     then
         printf "\n${YELLOW}${BOLD}Attempting graceful clean-up.${NC}${NC}\n"
@@ -650,6 +700,10 @@ function ctrl_c() {
     fi
 }
 
+##############################################################################
+# MAIN
+##############################################################################
+
 # Get the user OS
 get_os
 
@@ -659,43 +713,49 @@ clean_up
 # Create temporary folder(s)
 set_up
 
-if [ $DEFAULT -eq 0 ] && [ -z $OPENSSL_FIPS_CDROM_PATH ]
+if [ $DEFAULT -eq 0 ] && [ -z $OPENSSL_FIPS_CDROM_PATH ] 
 then
-    printf "\n\n${NC}This ${YELLOW}${BOLD}Dockerfile${NC}${NC} will build an image including ${YELLOW}${BOLD}Nginx${NC}${NC} compiled with \
-${YELLOW}${BOLD}OpenSSL${NC}${NC}\nand the ${YELLOW}${BOLD}OpenSSL FIPS object module${NC}${NC} running on the latest Ubuntu. To be\nFIPS \
-compliant, the OpenSSL FIPS object module source code must be copied\nfrom a ${YELLOW}${BOLD}CD provided by the OpenSSL Software Foundation${NC}${NC}."
+    if [ $NOCD -eq 0 ]
+    then
+        printf "\n\n${NC}This ${YELLOW}${BOLD}Dockerfile${NC}${NC} will build an image including ${YELLOW}${BOLD}Nginx${NC}${NC} compiled with \
+    ${YELLOW}${BOLD}OpenSSL${NC}${NC}\nand the ${YELLOW}${BOLD}OpenSSL FIPS object module${NC}${NC} running on the latest Ubuntu. To be\nFIPS \
+    compliant, the OpenSSL FIPS object module source code must be copied\nfrom a ${YELLOW}${BOLD}CD provided by the OpenSSL Software Foundation${NC}${NC}."
 
-    while true
-    do
-        printf "\n\n${NC}Do you have a CD provided by the OpenSSL Software Foundation? ${BOLD}(y/n)\n"
-        read -ep "(default: y): ${NC}${NC}" yn
-        case $yn in
-            [Nn]* )
-                handle_no_cd
-                break
-                ;;
-            * )
-                if [ -z "$OPENSSL_FIPS_CDROM_PATH" -a "${OPENSSL_FIPS_CDROM_PATH+x}" = "x" ]
-                then
-                    get_cdrom_volume_path
-                fi
-                if [ -z "$OPENSSL_FIPS_VERSION" -a "${OPENSSL_FIPS_VERSION+x}" = "x" ]
-                then
-                    get_version
-                fi
-                get_nginx_paths
-                get_source_code
-                break
-                ;;
-        esac
-    done
+        while true
+        do
+            printf "\n\n${NC}Do you have a CD provided by the OpenSSL Software Foundation? ${BOLD}(y/n)\n"
+            read -ep "(default: y): ${NC}${NC}" yn
+            case $yn in
+                [Nn]* )
+                    handle_no_cd
+                    break
+                    ;;
+                * )
+                    if [ -z "$OPENSSL_FIPS_CDROM_PATH" -a "${OPENSSL_FIPS_CDROM_PATH+x}" = "x" ]
+                    then
+                        get_cdrom_volume_path
+                    fi
+                    if [ -z "$OPENSSL_FIPS_VERSION" -a "${OPENSSL_FIPS_VERSION+x}" = "x" ]
+                    then
+                        get_version
+                    fi
+                    get_nginx_paths
+                    get_source_code
+                    break
+                    ;;
+            esac
+        done
+    else
+        printf "${NC}Since ${YELLOW}--no-cd${NC} option is present, skipping CD-ROM configuration.\n"
+        handle_no_cd
+    fi
 else
     if [ -z $OPENSSL_FIPS_CDROM_PATH ]
     then
         OPENSSL_FIPS_CDROM_PATH="$DEFAULT_OPENSSL_FIPS_CDROM_PATH"
         printf "${NC}Using OpenSSL Software Foundation CD-ROM path: $OPENSSL_FIPS_CDROM_PATH\n"
     fi
-    if [ -z $NGINX_CONF_PATH]
+    if [ -z $NGINX_CONF_PATH ]
     then
         NGINX_CONF_PATH="$DEFAULT_NGINX_CONF_PATH"
         printf "${NC}Using Nginx conf folder path: $NGINX_CONF_PATH\n"

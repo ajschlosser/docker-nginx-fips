@@ -25,14 +25,32 @@ The build script also accepts the following command-line arguments:
     --port                      If the --run option exists, the container will expose this port
                                     (can include as many as needed, e.g. --port 8080:80 --port 4443:443)
     --no-expose                 If the --run option exists, don't expose any ports
-    --nginx-conf-mount-path     If the --run option exists, mount this path as the Nginx conf folder (optional)
+    --nginx-conf-mount-path     If the --run option exists, mount this path as the Nginx conf folder
+    --ssl-certs-mount-path      If the --run option exists, mount this path as the SSL certs folder
     --no-clean                  Don't clean up temporary files after build
+    --no-cd                     Don't prompt user for any CD-ROM related information, and just use the
+                                    provided FIPS object module source
     --quiet                     Try to repress verbose Docker output
     --help                      Show this help
-    
+
 The `--default` option overrules all others but `--image-tag`, `--run`, `--nginx-conf-mount-path`, `--no-clean`, and `--quiet`. If no OpenSSL Software Foundation CD-ROM is provided, and the image is instead built using the source code provided in this repository, then `--openssl-fips-cdrom-path` and `--openssl-fips-version` will be ignored. (In this case, however, the image will not necessarily be FIPS-compliant.)
 
 #### Examples
+
+##### Quickstart
+
+The quickest (or at least the most succinct) way to get a container up and running is:
+
+```sh
+./build.sh \
+    --run                                   \
+    --name api-server                       \
+    --port 8080:80                          \
+    --port 4443:443                         \
+    --default
+```
+
+But this will not *necessarily* be FIPS-compliant.
 
 ##### Building with default options
 
@@ -42,8 +60,8 @@ In general, running the build script with the `--default` option is the equivale
 ./build.sh \
     --openssl-fips-cdrom-path /Volumes/OpenSSL  \
     --openssl-fips-version 2.0.10               \
-    --ssl-cert-path ./cert                      \
-    --nginx-conf-path ./conf                    \
+    --ssl-cert-path ${PWD}/lib/cert             \
+    --nginx-conf-path ${PWD}/lib/conf           \
     --image-tag ${USER}/nginx-fips
 ```
 
@@ -57,18 +75,19 @@ The default build can be executed with certain additional options, e.g.
 
 ```sh
 ./build.sh \
-    --image-tag dingus                   \
-    --run                                \
-    --name api-server                    \
-    --port 8080:80                       \
-    --port 4443:443                      \
-    --nginx-conf-mount-path ${PWD}/conf  \
-    --no-clean                           \
-    --quiet                              \
+    --image-tag nginx-fips-gateway          \
+    --run                                   \
+    --name api-server                       \
+    --port 8080:80                          \
+    --port 4443:443                         \
+    --nginx-conf-mount-path ${PWD}/lib/conf \
+    --ssl-certs-mount-path ${PWD}/lib/certs \
+    --no-clean                              \
+    --quiet                                 \
     --default
 ```
 
-If the above command is executed, a default Docker image (tagged 'dingus') will be built with verbose Docker output suppressed; after it is built, it will be run with a mounted volume, './conf'. The container will be named 'api-server'. The container's port 80 will be forwarded to the host's port 8080; likewise, 443 will be forwarded to 4443. If the build script is interrupted or finishes, it will not attempt to clean up temporary files and folders, due to the `--no-clean` option being present. Note that the `--default` option is last in this case.
+If the above command is executed, a default Docker image (tagged 'nginx-fips-gateway') will be built with verbose Docker output suppressed; after it is built, it will be run with a mounted volume, './conf'. The container will be named 'api-server'. The container's port 80 will be forwarded to the host's port 8080; likewise, 443 will be forwarded to 4443. If the build script is interrupted or finishes, it will not attempt to clean up temporary files and folders, due to the `--no-clean` option being present. Note that the `--default` option is last in this case.
 
 ## Details
 
