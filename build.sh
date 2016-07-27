@@ -4,7 +4,7 @@
 
 trap ctrl_c INT # Handle interrupts
 
-echo "\n"
+printf "\n"
 
 ##############################################################################
 # DEPENDENCY CHECK
@@ -39,10 +39,12 @@ DEFAULT_LIB_PATH="lib"
 DEFAULT_NGINX_PATH="${PWD}/$DEFAULT_SRC_PATH/nginx-1.11.2"
 DEFAULT_NGINX_CONF_PATH="${PWD}/$DEFAULT_LIB_PATH/conf"
 DEFAULT_CERTIFICATE_PATH="${PWD}/$DEFAULT_LIB_PATH/certs"
+DEFAULT_CERTIFICATE_KEY_PATH="${PWD}/$DEFAULT_LIB_PATH/private"
 DEFAULT_TMP_PATH="${PWD}/tmp"
 
 # Global build variables
 CERTIFICATE_PATH=
+CERTIFICATE_KEY_PATH=
 CONTAINER_NAME=
 DEFAULT=0
 EXPOSE_PORTS=""
@@ -62,6 +64,7 @@ OPENSSL_FIPS_VERSION=
 QUIET=""
 RUN=0
 SSL_CERTS_MOUNT_PATH=""
+SSL_PRIVATE_MOUNT_PATH=""
 
 ##############################################################################
 # FUNCTIONS
@@ -81,7 +84,8 @@ print_help () {
     --default                   Use default settings; do not prompt user for input      \n\
     --openssl-fips-cdrom-path   Path for the volume (CD-ROM) with the source            \n\
     --openssl-fips-version      Version of the source to install                        \n\
-    --ssl-cert-path             Path for SSL certificate(s) and key(s)                  \n\
+    --ssl-cert-path             Path for SSL certificate(s)                             \n\
+    --ssl-key-path              Path for SSL certificate key(s)                         \n\
     --nginx-conf-path           Path for Nginx conf directory to use in deployment      \n\
     --image-tag                 Tag for the Docker image to be built                    \n\
     --run                       Attempt to run the Docker image when finished           \n\
@@ -93,8 +97,12 @@ print_help () {
     --no-expose                 If the --run option exists, don't expose any ports      \n\
     --nginx-conf-mount-path     If the --run option exists, mount this path as the Nginx\n\
                                     conf folder
-    --ssl-certs-mount-path      If the --run option exists, mount this path as the SSL  \n\
-                                    certs folder
+    --ssl-cert-mount-path       If the --run option exists, mount this path as the SSL  \n\
+                                    certs folder.                                       \n\
+    --ssl-private-mount-path    If the --run option exists, mount this path as the SSL  \n\
+                                    private folder. If --ssl-cert-mount-path is defined,\n\
+                                    but this option is not, then --ssl-cert-mount-path  \n\
+                                    will also be mounted as the SSL private folder      \n\
     --no-clean                  Don't clean up temporary files after build              \n\
     --no-cd                     Don't prompt user for any CD-ROM related information,   \n\
                                     and just use the provided FIPS object module source \n\
@@ -123,10 +131,13 @@ while getopts "h:-:" opt; do
                 NOEXPOSE=1
                 ;;
             no-cd)
+                printf "${NC}No attempt will be made to locate the OpenSSL Software Foundation CD-ROM.\n"
                 NOCD=1
                 ;;
             port)
-                EXPOSE_PORTS="$EXPOSE_PORTS -p ${!OPTIND}"
+                val=${!OPTIND}
+                printf "${NC}Forwarding ports: $val\n"
+                EXPOSE_PORTS="$EXPOSE_PORTS -p $val"
                 OPTIND=$(( $OPTIND + 1 ))
                 ;;
             quiet)
@@ -154,7 +165,18 @@ while getopts "h:-:" opt; do
                 if [ -d "$val" ]
                 then
                     CERTIFICATE_PATH="$val"
-                    printf "\n${NC}Using SSL certificate and key path: $val${NC}\n" >&2;
+                    printf "\n${NC}Using SSL certificate(s) path: $val${NC}\n" >&2;
+                else
+                    printf "\n${RED}Could not locate path: $val${NC}\n"
+                fi
+                ;;
+            ssl-key-path)
+                val="${!OPTIND}"
+                OPTIND=$(( $OPTIND + 1 ))
+                if [ -d "$val" ]
+                then
+                    CERTIFICATE_KEY_PATH="$val"
+                    printf "\n${NC}Using SSL certificate key(s) path: $val${NC}\n" >&2;
                 else
                     printf "\n${RED}Could not locate path: $val${NC}\n"
                 fi
@@ -198,6 +220,17 @@ while getopts "h:-:" opt; do
                 then
                     SSL_CERTS_MOUNT_PATH="$val"
                     printf "${NC}Will mount SSL certs folder path: $val${NC}\n" >&2;
+                else
+                    printf "\n${RED}Could not locate path: $val${NC}\n"
+                fi
+                ;;
+            ssl-private-mount-path)
+                val="${!OPTIND}"
+                OPTIND=$(( $OPTIND + 1 ))
+                if [ -d "$val" ]
+                then
+                    SSL_PRIVATE_MOUNT_PATH="$val"
+                    printf "${NC}Will mount SSL private folder path: $val${NC}\n" >&2;
                 else
                     printf "\n${RED}Could not locate path: $val${NC}\n"
                 fi
@@ -299,6 +332,30 @@ clean_up () {
 }
 
 ##############################################################################
+# Prints informational messages (if provided), and calls clean_up if passed
+# an error code
+# Globals:
+#   None
+# Arguments:
+#   None
+# Returns:
+#   None
+##############################################################################
+clean_up_on_error () {
+    if [ $1 -ne 0 ]
+    then
+        if [ -n "$3" ]
+        then
+            printf "${RED}$3${NC}\n"
+        fi
+        clean_up $1
+    elif [ -n "$2" ]
+    then
+        printf "${GREEN}$2${NC}\n"
+    fi
+}
+
+##############################################################################
 # Create a new temporary folder for the source code
 # Globals:
 #   NOCLEAN
@@ -312,13 +369,23 @@ set_up () {
     
     printf "${NC}Creating new temporary folder...\n"
     mkdir $DEFAULT_TMP_PATH
-    if [ $? -ne 0 ]
-    then
-        printf "${RED}Failed to create new temporary folder.${NC}\n"
-        exit 1
-    else
-        printf "${GREEN}Temporary folder successfully created.${NC}\n"
-    fi
+    
+    clean_up_on_error $? \
+        "Temporary folder successfully created: ${BOLD}$DEFAULT_TMP_PATH" \
+        "Failed to create new temporary folder: ${BOLD}$DEFAULT_TMP_PATH"
+    
+    mkdir $DEFAULT_TMP_PATH/certs
+    
+    clean_up_on_error $? \
+        "Temporary folder successfully created: ${BOLD}$DEFAULT_TMP_PATH/certs" \
+        "Failed to create new temporary folder: ${BOLD}$DEFAULT_TMP_PATH/certs"
+    
+    mkdir $DEFAULT_TMP_PATH/private
+    
+    clean_up_on_error $? \
+        "Temporary folder successfully created: ${BOLD}$DEFAULT_TMP_PATH/private" \
+        "Failed to create new temporary folder: ${BOLD}$DEFAULT_TMP_PATH/private"
+    
 }
 
 ##############################################################################
@@ -390,7 +457,7 @@ build_docker_image () {
     printf "Building image using OpenSSL FIPS object module source code path:\n\t${BOLD}$1${NC}${NC}\n\n"
     if [ "$QUIET" == "-q" ]
     then
-        printf "Since the ${YELLOW}--quiet${NC} option was set, there won't be much output. Please be patient...\n"
+        printf "Since the --quiet${NC} option was set, there won't be much output. Please be patient...\n"
     fi
     docker build                                \
         $QUIET                                  \
@@ -398,40 +465,46 @@ build_docker_image () {
         --build-arg OPENSSL_FIPS_PATH=$1        \
         --build-arg SRC_PATH=$DEFAULT_SRC_PATH  \
         --build-arg LIB_PATH=$DEFAULT_LIB_PATH .
-    if [ $? -ne 0 ]
+        
+    clean_up_on_error $? \
+        "${BOLD}You did it, buddy!" \
+        "There was a problem building the Docker image"
+        
+    printf "\n${GREEN}${BOLD}You did it, buddy!${NC}${NC}\n"
+    if [ $RUN -eq 1 ]
     then
-        printf "\n${RED}${BOLD}There was a problem building the Docker image ${NC}${NC}\n"
-        clean_up $?
-    else
-        printf "\n${GREEN}${BOLD}You did it, buddy!${NC}${NC}\n"
-        if [ $RUN -eq 1 ]
+        if [ -z $CONTAINER_NAME ]
         then
-            if [ -z $CONTAINER_NAME ]
-            then
-                get_container_name
-            fi
-            if [ -z "$EXPOSE_PORTS" ]
-            then
-                if [ $NOEXPOSE -eq 0 ]
-                then
-                    EXPOSE_PORTS="$DEFAULT_EXPOSE_PORTS"
-                else
-                    EXPOSE_PORTS=""
-                fi
-            fi
-            if [ -n "$NGINX_CONF_MOUNT_PATH" ]
-            then
-                MOUNT_PATHS="$MOUNT_PATHS -v $NGINX_CONF_MOUNT_PATH:/usr/local/nginx/conf"
-            fi
-            if [ -n "$SSL_CERTS_MOUNT_PATH" ]
-            then
-                MOUNT_PATHS="$MOUNT_PATHS -v $SSL_CERTS_MOUNT_PATH:/usr/local/ssl/certs"
-            fi
-            run_docker
+            get_container_name
         fi
-        clean_up
-        exit 0
+        if [ -z "$EXPOSE_PORTS" ]
+        then
+            if [ $NOEXPOSE -eq 0 ]
+            then
+                EXPOSE_PORTS="$DEFAULT_EXPOSE_PORTS"
+            else
+                EXPOSE_PORTS=""
+            fi
+        fi
+        if [ -n "$NGINX_CONF_MOUNT_PATH" ]
+        then
+            MOUNT_PATHS="$MOUNT_PATHS -v $NGINX_CONF_MOUNT_PATH:/usr/local/nginx/conf"
+        fi
+        if [ -n "$SSL_CERTS_MOUNT_PATH" ]
+        then
+            MOUNT_PATHS="$MOUNT_PATHS -v $SSL_CERTS_MOUNT_PATH:/usr/local/ssl/certs"
+            if [ -n "$SSL_PRIVATE_MOUNT_PATH" ]
+            then
+                MOUNT_PATHS="$MOUNT_PATHS -v $SSL_PRIVATE_MOUNT_PATH:/usr/local/ssl/private"
+            else
+                MOUNT_PATHS="$MOUNT_PATHS -v $SSL_CERTS_MOUNT_PATH:/usr/local/ssl/private"
+            fi
+        fi
+        run_docker
     fi
+    clean_up
+    exit 0
+
 }
 
 ##############################################################################
@@ -496,16 +569,13 @@ get_version () {
 ##############################################################################
 get_source_code () {
     
-    printf "\nExtracting OpenSSL FIPS object module $OPENSSL_FIPS_VERSION source code from $OPENSSL_FIPS_CDROM_PATH/$FILENAME...\n"
+    printf "\nExtracting OpenSSL FIPS object module ${BOLD}$OPENSSL_FIPS_VERSION${NC} source code from ${BOLD}$OPENSSL_FIPS_CDROM_PATH/$FILENAME${NC}...\n"
 
     tar -xvf $OPENSSL_FIPS_CDROM_PATH/$FILENAME -C $DEFAULT_TMP_PATH
-    if [ $? -ne 0 ]
-    then
-        printf "\n${RED}Failed to copy and extract source code.${NC}\n"
-        clean_up $?
-    else
-        printf "\n${GREEN}Finished getting ${YELLOW}${BOLD}OpenSSL FIPS object module $OPENSSL_FIPS_VERSION${NC}${GREEN} source.${NC}\n"
-    fi
+    
+    clean_up_on_error $? \
+        "Finished getting ${BOLD}OpenSSL FIPS object module $OPENSSL_FIPS_VERSION${NC}${GREEN} source." \
+        "Failed to copy and extract source code."
     
     OPENSSL_FIPS_EXTRACT_PATH=${FILENAME%.tar.gz}
     
@@ -516,7 +586,9 @@ get_source_code () {
 # Generates self-signed SSL certificates and keys
 # Globals:
 #   CERTIFICATE_PATH
+#   CERTIFICATE_KEY_PATH
 #   DEFAULT_CERTIFICATE_PATH
+#   DEFAULT_CERTIFICATE_KEY_PATH
 # Arguments:
 #   None
 # Returns:
@@ -528,23 +600,48 @@ generate_ssl_certificate () {
         printf >&2 "${RED}You need to install OpenSSL to generate self-signed SSL certificates.${NC}\n"
         clean_up 1
     }
-    openssl req -nodes -new -x509 -keyout $DEFAULT_CERTIFICATE_PATH/server.key -out $DEFAULT_CERTIFICATE_PATH/server.crt
-    if [ $? -ne 0 ]
+    openssl req -nodes -new -x509 -keyout $DEFAULT_CERTIFICATE_KEY_PATH/server.key -out $DEFAULT_CERTIFICATE_PATH/server.crt
+    
+    clean_up_on_error $? \
+        "Finished generating ${RED}${BOLD}self-signed${NC}${BOLD} SSL certificate and key${NC}${GREEN}." \
+        "Failed to generate SSL certificate and key."
+    
+    CERTIFICATE_PATH="$DEFAULT_CERTIFICATE_PATH"
+    CERTIFICATE_KEY_PATH="$DEFAULT_CERTIFICATE_PATH"
+}
+
+##############################################################################
+# Copies SSL certificate key(s) to the temporary folder for building
+# Globals:
+#   CERTIFICATE_KEY_PATH
+#   DEFAULT_CERTIFICATE_PATH
+# Arguments:
+#   None
+# Returns:
+#   None
+##############################################################################
+get_ssl_certificate_key () {
+    printf "\nPlease enter the path for your SSL certificate ${BOLD}key(s)${NC}.\n"
+    read -ep "${BOLD}(default: $DEFAULT_CERTIFICATE_KEY_PATH): ${NC}${NC}" key_path
+    if [ -z $key_path ]
     then
-        printf "\n${RED}Failed to generate SSL certificate and key.${NC}\n"
-        clean_up $?
+        CERTIFICATE_KEY_PATH="$DEFAULT_CERTIFICATE_KEY_PATH"
     else
-        CERTIFICATE_PATH="$DEFAULT_CERTIFICATE_PATH"
-        printf "\n${GREEN}Finished generating ${YELLOW}${BOLD}self-signed SSL certificate and key${NC}${GREEN}.${NC}\n"
+        if [ -d $key_path ]
+        then
+            CERTIFICATE_KEY_PATH="$key_path"
+        else
+            printf "\n${RED}Path not found: $key_path.${NC} Let's try that again.\n"
+            get_ssl_certificate_key
+        fi
     fi
 }
 
 ##############################################################################
-# Copies SSL certificates and keys to the temporary folder for building
+# Copies SSL certificate(s) to the temporary folder for building
 # Globals:
 #   CERTIFICATE_PATH
 #   DEFAULT_CERTIFICATE_PATH
-#   DEFAULT_TMP_PATH
 # Arguments:
 #   None
 # Returns:
@@ -556,7 +653,7 @@ get_ssl_certificate () {
     then
         while true
         do
-            printf "\n${NC}Will you be providing your own ${BOLD}${YELLOW}SSL certificate and key${NC}${NC}? ${BOLD}(y/n)\n"
+            printf "\n${NC}Will you be providing your own ${BOLD}SSL certificate and key${NC}${NC}? ${BOLD}(y/n)\n"
             read -ep "(default: y): ${NC}${NC}" yn
             case $yn in
                 [Nn]* )
@@ -566,15 +663,17 @@ get_ssl_certificate () {
                     break
                     ;;
                 * )
-                    printf "\nPlease enter the path for your SSL certificate and key.\n"
+                    printf "\nPlease enter the path for your SSL certificate(s).\n"
                     read -ep "${BOLD}(default: $DEFAULT_CERTIFICATE_PATH): ${NC}${NC}" cert_path
                     if [ -z $cert_path ]
                     then
                         CERTIFICATE_PATH="$DEFAULT_CERTIFICATE_PATH"
+                        get_ssl_certificate_key
                     else
                         if [ -d $cert_path ]
                         then
                             CERTIFICATE_PATH="$cert_path"
+                            get_ssl_certificate_key
                         else
                             printf "\n${RED}Path not found: $cert_path.${NC} Let's try that again.\n"
                             get_ssl_certificate
@@ -585,6 +684,18 @@ get_ssl_certificate () {
             esac
         done
     fi
+    
+    cp -R $CERTIFICATE_PATH $DEFAULT_TMP_PATH/
+    
+    clean_up_on_error $? \
+        "Finished copying SSL certificate(s) folder to temporary location." \
+        "Failed to copy SSL certificate(s) folder to temporary location."
+    
+    cp -R $CERTIFICATE_KEY_PATH $DEFAULT_TMP_PATH/
+    
+    clean_up_on_error $? \
+        "Finished copying SSL certificate key(s) folder to temporary location." \
+        "Failed to copy SSL certificate key(s) folder to temporary location."
     
 }
 
@@ -620,20 +731,17 @@ get_nginx_conf () {
     fi
     mkdir $DEFAULT_TMP_PATH/conf \
         && cp $NGINX_CONF_PATH/* $DEFAULT_TMP_PATH/conf
-    if [ $? -ne 0 ]
-    then
-        printf "\n${RED}Failed to copy Nginx conf folder to temporary location.${NC}\n"
-        clean_up $?
-    else
-        printf "${GREEN}Finished copying Nginx conf folder to temporary location.${NC}\n"
-    fi
+        
+    clean_up_on_error $? \
+        "Finished copying Nginx conf folder to temporary location." \
+        "Failed to copy Nginx conf folder to temporary location."
 }
 
 ##############################################################################
 # Get Nginx-related paths and copy files if necessary
 # Globals:
-#   CERTIFICATE_PATH
-#   NGINX_CONF_PATH
+#   NGINX_CONF_MOUNT_PATH
+#   SSL_CERTS_MOUNT_PATH
 # Arguments:
 #   None
 # Returns:
@@ -646,6 +754,10 @@ get_nginx_paths () {
     fi
     if [ -z $SSL_CERTS_MOUNT_PATH ]
     then
+        get_ssl_certificate
+    else
+        $CERTIFICATE_PATH=$SSL_CERTS_MOUNT_PATH
+        $CERTIFICATE_KEY_PATH=$SSL_PRIVATE_MOUNT_PATH
         get_ssl_certificate
     fi
 }
@@ -679,10 +791,10 @@ handle_no_cd () {
 function ctrl_c () {
     if [ $NOCLEAN -eq 0 ]
     then
-        printf "\n${YELLOW}${BOLD}Attempting graceful clean-up.${NC}${NC}\n"
+        printf "\n${BOLD}Attempting graceful clean-up.${NC}${NC}\n"
         clean_up 1
     else
-        printf "\n${RED}${BOLD}Would have attempted graceful clean-up, but ${YELLOW}--no-clean${RED} option was set.${NC}${NC}\n"
+        printf "\n${RED}${BOLD}Would have attempted graceful clean-up, but --no-clean${RED} option was set.${NC}${NC}\n"
         printf "Temporary files and dangling Docker images have ${BOLD}not${NC}${NC} been deleted.\n"
         exit 1
     fi
@@ -705,9 +817,9 @@ if [ $DEFAULT -eq 0 ] && [ -z $OPENSSL_FIPS_CDROM_PATH ]
 then
     if [ $NOCD -eq 0 ]
     then
-        printf "\n\n${NC}This ${YELLOW}${BOLD}Dockerfile${NC}${NC} will build an image including ${YELLOW}${BOLD}Nginx${NC}${NC} compiled with \
-    ${YELLOW}${BOLD}OpenSSL${NC}${NC}\nand the ${YELLOW}${BOLD}OpenSSL FIPS object module${NC}${NC} running on the latest Ubuntu. To be\nFIPS \
-    compliant, the OpenSSL FIPS object module source code must be copied\nfrom a ${YELLOW}${BOLD}CD provided by the OpenSSL Software Foundation${NC}${NC}."
+        printf "\n\n${NC}This ${BOLD}Dockerfile${NC}${NC} will build an image including ${BOLD}Nginx${NC}${NC} compiled with \
+${BOLD}OpenSSL${NC}${NC}\nand the ${BOLD}OpenSSL FIPS object module${NC}${NC} running on the latest Ubuntu. To be\nFIPS \
+compliant, the OpenSSL FIPS object module source code must be copied\nfrom a ${BOLD}CD provided by the OpenSSL Software Foundation${NC}${NC}."
 
         while true
         do
@@ -734,7 +846,7 @@ then
             esac
         done
     else
-        printf "${NC}Since ${YELLOW}--no-cd${NC} option is present, skipping CD-ROM configuration.\n"
+        printf "${NC}Since --no-cd${NC} option is present, skipping CD-ROM configuration.\n"
         handle_no_cd
     fi
 else
@@ -751,7 +863,12 @@ else
     if [ -z $CERTIFICATE_PATH ]
     then
         CERTIFICATE_PATH="$DEFAULT_CERTIFICATE_PATH"
-        printf "${NC}Using SSL certificate path: $CERTIFICATE_PATH\n"
+        printf "${NC}Using SSL certificate(s) path: $CERTIFICATE_PATH\n"
+    fi
+    if [ -z $CERTIFICATE_KEY_PATH ]
+    then
+        CERTIFICATE_KEY_PATH="$DEFAULT_CERTIFICATE_KEY_PATH"
+        printf "${NC}Using SSL certificate key(s) path: $CERTIFICATE_KEY_PATH\n"
     fi
     if [ -z $FILENAME ]
     then

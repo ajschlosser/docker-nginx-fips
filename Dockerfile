@@ -99,7 +99,8 @@ RUN make install
 COPY $LIB_PATH/conf $NGINX_INSTALL_PATH/conf
 
 # Copy SSL certificate(s)/key(s)
-COPY $LIB_PATH/certs $SSL_INSTALL_PATH/certs
+COPY $SRC_TMP_PATH/certs/*.crt      $SSL_INSTALL_PATH/certs/
+COPY $SRC_TMP_PATH/private/*.key    $SSL_INSTALL_PATH/private/
 
 ##############################################################################
 # LINKS
